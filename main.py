@@ -343,8 +343,20 @@ class JobManager(QMainWindow):
         self.cleanup_resources()
 
     def setup_tray(self):
+        # 检查系统是否支持系统托盘
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            QMessageBox.warning(self, '警告', '系统不支持托盘图标功能，程序将以普通窗口模式运行。')
+            return
+
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon('icon.svg'))
+        
+        # 检查图标文件是否存在
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.svg')
+        if not os.path.exists(icon_path):
+            QMessageBox.warning(self, '警告', '找不到图标文件，将使用默认图标。')
+        else:
+            self.tray_icon.setIcon(QIcon(icon_path))
+            
         self.tray_icon.setToolTip('任务管理器')
 
         # 创建托盘菜单
@@ -405,11 +417,6 @@ class JobManager(QMainWindow):
         total_count = enabled_count + disabled_count
         self.status_bar.showMessage(f'总任务数: {total_count} | 已启用: {enabled_count} | 已禁用: {disabled_count}')
         self.update_status_menu()
-
-    def closeEvent(self, event):
-        event.ignore()
-        self.hide()
-        self.tray_icon.showMessage('任务管理器', '程序已最小化到系统托盘', QSystemTrayIcon.MessageIcon.Information)
 
     def setup_ui(self):
         self.setMinimumSize(1000, 500)
