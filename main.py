@@ -1,9 +1,27 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Chronos - 图形化定时任务管理工具
+
+这个程序提供了一个基于PyQt6的图形界面，用于管理和监控Linux/Unix系统的crontab任务。
+主要功能包括：
+- 可视化管理crontab任务
+- 支持完整的cron表达式
+- 实时任务状态监控
+- 内置日志查看器
+- 系统托盘支持
+
+作者：konbluesky
+许可证：MIT
+"""
+
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
                              QDialog, QLabel, QLineEdit, QFormLayout, QMessageBox,
                              QHeaderView, QComboBox, QTextEdit, QScrollBar, QMenu,
-                             QToolBar, QStatusBar, QSizePolicy, QSystemTrayIcon)
+                             QToolBar, QStatusBar, QSizePolicy, QSystemTrayIcon, QCheckBox)
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QIcon, QAction, QCursor
 import os
@@ -196,49 +214,133 @@ class LogViewerDialog(QDialog):
         self.setMinimumSize(800, 600)
         layout = QVBoxLayout(self)
         
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        layout.addWidget(self.log_text)
+        # 添加工具栏
+        toolbar = QHBoxLayout()
+        self.auto_scroll_checkbox = QCheckBox('自动滚动')
+        self.auto_scroll_checkbox.setChecked(True)
+        toolbar.addWidget(self.auto_scroll_checkbox)
         
-        button_layout = QHBoxLayout()
         self.clear_button = QPushButton('清除日志')
         self.clear_button.clicked.connect(self.clear_log)
-        button_layout.addWidget(self.clear_button)
-        button_layout.addStretch()
-        layout.addLayout(button_layout)
+        toolbar.addWidget(self.clear_button)
+        
+        self.export_button = QPushButton('导出日志')
+        self.export_button.clicked.connect(self.export_log)
+        toolbar.addWidget(self.export_button)
+        
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        
+        # 日志显示区域
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setStyleSheet('font-family: monospace; background-color: #f8f9fa; padding: 10px;')
+        layout.addWidget(self.log_text)
         
         self.update_log()
 
     def update_log(self):
         try:
+            if not os.path.exists(self.log_file):
+                self.log_text.setText('日志文件不存在')
+                return
+                
             with open(self.log_file, 'r') as f:
                 content = f.read()
                 if content != self.log_text.toPlainText():
                     self.log_text.setText(content)
-                    self.log_text.verticalScrollBar().setValue(
-                        self.log_text.verticalScrollBar().maximum()
-                    )
+                    if self.auto_scroll_checkbox.isChecked():
+                        self.log_text.verticalScrollBar().setValue(
+                            self.log_text.verticalScrollBar().maximum()
+                        )
+        except PermissionError:
+            self.log_text.setText('无法读取日志文件：权限不足')
         except Exception as e:
-            self.log_text.setText(f"无法读取日志文件：{str(e)}")
+            self.log_text.setText(f'读取日志文件时发生错误：{str(e)}')
 
     def clear_log(self):
+        reply = QMessageBox.question(self, '确认', '确定要清除日志吗？',
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                with open(self.log_file, 'w') as f:
+                    f.write(f"=== 日志清除于 {datetime.datetime.now()} ===\n")
+                self.update_log()
+                QMessageBox.information(self, '成功', '日志已清除')
+            except PermissionError:
+                QMessageBox.critical(self, '错误', '无法清除日志：权限不足')
+            except Exception as e:
+                QMessageBox.critical(self, '错误', f'清除日志失败：{str(e)}')
+
+    def export_log(self):
         try:
-            with open(self.log_file, 'w') as f:
-                f.write(f"=== Log cleared at {datetime.datetime.now()} ===\n")
-            self.update_log()
+            desktop_path = os.path.expanduser('~/Desktop')
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            export_path = os.path.join(desktop_path, f'log_export_{timestamp}.txt')
+            
+            with open(self.log_file, 'r') as src, open(export_path, 'w') as dst:
+                dst.write(src.read())
+            
+            QMessageBox.information(self, '成功', f'日志已导出到：{export_path}')
         except Exception as e:
-            QMessageBox.critical(self, '错误', f'清除日志失败：{str(e)}')
+            QMessageBox.critical(self, '错误', f'导出日志失败：{str(e)}')
+
+    def closeEvent(self, event):
+        self.timer.stop()
+        event.accept()
 
 class JobManager(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('Chronos - 时序管理器')
+        # 设置应用程序名称和组织信息
+        QApplication.setApplicationName('Chronos')
+        QApplication.setApplicationDisplayName('Chronos')
+        QApplication.setOrganizationName('konbluesky')
+        QApplication.setOrganizationDomain('github.com/konbluesky')
+        
+        self.setWindowTitle('Chronos')
         self.setup_ui()
-        self.cron = CronTab(user=True)
+        try:
+            self.cron = CronTab(user=True)
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'无法初始化crontab：{str(e)}\n请确保系统支持crontab且当前用户有权限访问。')
+            sys.exit(1)
+
+        # 初始化日志目录
         self.log_dir = os.path.expanduser('~/.job_manager/logs')
-        os.makedirs(self.log_dir, exist_ok=True)
+        try:
+            os.makedirs(self.log_dir, exist_ok=True)
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'无法创建日志目录：{str(e)}\n请确保当前用户有权限创建目录。')
+            sys.exit(1)
+
         self.setup_tray()
         self.refresh_jobs()
+
+        # 设置自动刷新定时器
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self.refresh_jobs)
+        self.refresh_timer.start(60000)  # 每分钟刷新一次
+
+    def closeEvent(self, event):
+        if not self.tray_icon.isVisible():
+            # 如果托盘图标不可见，则正常退出
+            self.cleanup_resources()
+            event.accept()
+        else:
+            event.ignore()
+            self.hide()
+            self.tray_icon.showMessage('Chronos', '程序已最小化到系统托盘', QSystemTrayIcon.MessageIcon.Information)
+
+    def cleanup_resources(self):
+        """清理程序资源"""
+        if hasattr(self, 'refresh_timer'):
+            self.refresh_timer.stop()
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
+
+    def __del__(self):
+        self.cleanup_resources()
 
     def setup_tray(self):
         self.tray_icon = QSystemTrayIcon(self)
@@ -303,7 +405,6 @@ class JobManager(QMainWindow):
         total_count = enabled_count + disabled_count
         self.status_bar.showMessage(f'总任务数: {total_count} | 已启用: {enabled_count} | 已禁用: {disabled_count}')
         self.update_status_menu()
-        self.update_status_menu()
 
     def closeEvent(self, event):
         event.ignore()
@@ -315,6 +416,49 @@ class JobManager(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
+
+        # 设置窗口样式
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f5f5;
+            }
+            QTableWidget {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                gridline-color: #eee;
+            }
+            QTableWidget::item {
+                padding: 5px;
+            }
+            QTableWidget::item:selected {
+                background-color: #e3f2fd;
+                color: black;
+            }
+            QHeaderView::section {
+                background-color: #f8f9fa;
+                padding: 5px;
+                border: none;
+                border-bottom: 1px solid #ddd;
+            }
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
+            }
+            QPushButton:pressed {
+                background-color: #004085;
+            }
+            QStatusBar {
+                background-color: #f8f9fa;
+                color: #666;
+            }
+        """)
 
         # 创建菜单栏
         menubar = self.menuBar()
@@ -434,17 +578,40 @@ class JobManager(QMainWindow):
     def add_job(self):
         dialog = JobDialog(self)
         if dialog.exec():
-            name = dialog.name_edit.text()
-            command = dialog.command_edit.text()
+            name = dialog.name_edit.text().strip()
+            command = dialog.command_edit.text().strip()
             schedule = dialog.cron_editor.get_cron_expression()
 
+            # 验证输入
+            if not name:
+                QMessageBox.warning(self, '输入错误', '任务名称不能为空')
+                return
+            if not command:
+                QMessageBox.warning(self, '输入错误', '执行命令不能为空')
+                return
+
             try:
+                # 检查任务名是否重复
+                for job in self.cron:
+                    if job.comment == name:
+                        QMessageBox.warning(self, '输入错误', '任务名称已存在，请使用其他名称')
+                        return
+
                 log_file = os.path.join(self.log_dir, f"{name}.log")
                 wrapped_command = f"{command} >> \"{log_file}\" 2>&1"
                 job = self.cron.new(command=wrapped_command, comment=name)
                 job.setall(schedule)
+
                 try:
                     self.cron.write()
+                    # 创建日志文件并添加初始记录
+                    with open(log_file, 'a') as f:
+                        f.write(f"=== 任务创建于 {datetime.datetime.now()} ===\n")
+                        f.write(f"任务名称: {name}\n")
+                        f.write(f"执行命令: {command}\n")
+                        f.write(f"执行计划: {schedule}\n\n")
+                    self.refresh_jobs()
+                    self.status_bar.showMessage(f'任务 "{name}" 创建成功', 3000)
                 except IOError as e:
                     if 'Operation not permitted' in str(e):
                         QMessageBox.critical(self, '权限错误',
@@ -452,22 +619,10 @@ class JobManager(QMainWindow):
                             '请尝试以下解决方案：\n'
                             '1. 使用管理员权限运行此程序\n'
                             '2. 确保当前用户有权限修改crontab文件')
-                        return
-                    raise e
-                # 创建日志文件
-                with open(log_file, 'a') as f:
-                    f.write(f"=== Job created at {datetime.datetime.now()} ===\n")
-                self.refresh_jobs()
+                    else:
+                        QMessageBox.critical(self, '错误', f'写入定时任务失败：{str(e)}')
             except Exception as e:
-                error_msg = str(e)
-                if 'Operation not permitted' in error_msg:
-                    QMessageBox.critical(self, '权限错误',
-                        '无法修改定时任务，因为当前用户没有足够的权限。\n\n'
-                        '请尝试以下解决方案：\n'
-                        '1. 使用管理员权限运行此程序\n'
-                        '2. 确保当前用户有权限修改crontab文件')
-                else:
-                    QMessageBox.critical(self, '错误', f'添加任务失败：{error_msg}')
+                QMessageBox.critical(self, '错误', f'创建任务失败：{str(e)}')
 
     def edit_job(self):
         current_row = self.table.currentRow()
@@ -595,9 +750,14 @@ class JobManager(QMainWindow):
         elif action == view_log_action:
             self.view_log()
 
-    def show_about(self):
-        QMessageBox.about(self, '关于', 'Chronos - 时序管理器 v1.0\n\n一个简单的定时任务管理工具，支持cron表达式，可以方便地管理和监控定时任务。')
 
+    def show_about(self):
+        about_text = '<div style="text-align: center;">' \
+                     '<h2>Chronos v1.0</h2>' \
+                     '<p>一个简单的定时任务管理工具，支持cron表达式，可以方便地管理和监控定时任务。</p>' \
+                     '<p>GitHub: <a href="https://github.com/konbluesky/chronos.git">https://github.com/konbluesky/chronos.git</a></p>' \
+                     '</div>'
+        QMessageBox.about(self, '关于', about_text)
 
 def main():
     app = QApplication(sys.argv)
