@@ -17,12 +17,15 @@ Chronos - 图形化定时任务管理工具
 """
 
 import sys
+import re
+import subprocess
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QFormLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
                              QHeaderView, QMessageBox, QSystemTrayIcon, QMenu, QToolBar, QStatusBar,
-                             QHeaderView, QCheckBox, QDialog, QPlainTextEdit, QTextEdit, QComboBox)
+                             QHeaderView, QCheckBox, QDialog, QPlainTextEdit, QTextEdit, QComboBox,
+                             QFileDialog)
 from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QIcon, QAction, QCursor
+from PyQt6.QtGui import QIcon, QAction, QCursor, QBrush, QColor
 import os
 import datetime
 from crontab import CronTab
@@ -83,7 +86,7 @@ class CronEditor(QWidget):
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 background-color: white;
-                min-width: 120px;
+                min-width: 90px;
                 color: #333;
             }
             QComboBox:hover {
@@ -100,7 +103,6 @@ class CronEditor(QWidget):
             QComboBox::down-arrow {
                 width: 12px;
                 height: 12px;
-                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMiA0TDYgOEwxMCA0IiBzdHJva2U9IiM2NjYiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+);
                 margin-right: 5px;
             }
             QComboBox QAbstractItemView {
@@ -141,11 +143,11 @@ class CronEditor(QWidget):
         # 将水平布局添加到主布局
         layout.addLayout(time_layout)
 
-        # 添加表达式翻译标签
-        self.expression_label = QLabel()
-        self.expression_label.setWordWrap(True)
-        self.expression_label.setStyleSheet('padding: 8px; font-size: 12px; color: #666; background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 4px;')
-        layout.addWidget(self.expression_label)
+        # 添加表达式编辑框
+        self.expression_edit = QLineEdit()
+        self.expression_edit.setStyleSheet('padding: 8px; font-size: 12px; color: #666; background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 4px;')
+        self.expression_edit.textChanged.connect(self.on_expression_changed)
+        layout.addWidget(self.expression_edit)
 
         self.translation_label = QLabel()
         self.translation_label.setWordWrap(True)
@@ -161,6 +163,11 @@ class CronEditor(QWidget):
         self.weekday_combo.findChild(QComboBox).currentIndexChanged.connect(self.update_cron_expression)
 
         self.cron_expression = '* * * * *'
+        self.expression_edit.setText(self.cron_expression)
+        self.update_translation()
+
+    def on_expression_changed(self):
+        self.cron_expression = self.expression_edit.text()
         self.update_translation()
 
     def update_cron_expression(self):
@@ -173,17 +180,23 @@ class CronEditor(QWidget):
         
         # 更新cron表达式
         self.cron_expression = f'{minute} {hour} {day} {month} {weekday}'
+        self.expression_edit.setText(self.cron_expression)  # 更新编辑框的内容
         
         # 更新翻译
         self.update_translation()
 
     def update_translation(self):
-        # 更新原始表达式显示
-        self.expression_label.setText(f'Cron表达式：{self.cron_expression}')
-
         # 更新翻译后的内容
         translation = '执行规则：'
-        minute, hour, day, month, weekday = self.cron_expression.split()
+        try:
+            parts = self.cron_expression.strip().split()
+            if len(parts) != 5:
+                self.translation_label.setText('无效的cron表达式')
+                return
+            minute, hour, day, month, weekday = parts
+        except:
+            self.translation_label.setText('无效的cron表达式')
+            return
 
         # 翻译分钟
         if minute == '*':
@@ -230,8 +243,15 @@ class CronEditor(QWidget):
                 interval = weekday.split('/')[1]
                 translation += f'的每{interval}天'
             else:
-                weekday_names = ['日', '一', '二', '三', '四', '五', '六']
-                translation += f'的星期{weekday_names[int(weekday)]}'
+                try:
+                    weekday_num = int(weekday)
+                    if 0 <= weekday_num <= 6:
+                        weekday_names = ['日', '一', '二', '三', '四', '五', '六']
+                        translation += f'的星期{weekday_names[weekday_num]}'
+                    else:
+                        translation += f'(无效的星期值: {weekday})'
+                except ValueError:
+                    translation += f'(无效的星期值: {weekday})'
 
         translation += '执行'
         self.translation_label.setText(translation)
@@ -243,12 +263,24 @@ class CronEditor(QWidget):
         try:
             parts = expression.strip().split()
             if len(parts) == 5:
-                self.minute_combo.findChild(QComboBox).setCurrentText(parts[0])
-                self.hour_combo.findChild(QComboBox).setCurrentText(parts[1])
-                self.day_combo.findChild(QComboBox).setCurrentText(parts[2])
-                self.month_combo.findChild(QComboBox).setCurrentText(parts[3])
-                self.weekday_combo.findChild(QComboBox).setCurrentText(parts[4])
-        except Exception:
+                # 使用setCurrentData而不是setCurrentText来设置值
+                def set_combo_value(combo, value):
+                    combo_box = combo.findChild(QComboBox)
+                    # 查找匹配的数据值
+                    index = combo_box.findData(value)
+                    if index >= 0:
+                        combo_box.setCurrentIndex(index)
+                    else:
+                        # 如果找不到匹配的数据值，尝试直接设置文本
+                        combo_box.setCurrentText(value)
+
+                set_combo_value(self.minute_combo, parts[0])
+                set_combo_value(self.hour_combo, parts[1])
+                set_combo_value(self.day_combo, parts[2])
+                set_combo_value(self.month_combo, parts[3])
+                set_combo_value(self.weekday_combo, parts[4])
+        except Exception as e:
+            print(f"设置cron表达式时出错: {str(e)}")
             pass
 
 class JobDialog(QDialog):
@@ -460,14 +492,20 @@ class LogViewerDialog(QDialog):
 
     def export_log(self):
         try:
-            desktop_path = os.path.expanduser('~/Desktop')
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            export_path = os.path.join(desktop_path, f'log_export_{timestamp}.txt')
+            default_name = f'log_export_{timestamp}.txt'
             
-            with open(self.log_file, 'r') as src, open(export_path, 'w') as dst:
-                dst.write(src.read())
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                '导出日志',
+                os.path.join(os.path.expanduser('~/Desktop'), default_name),
+                '文本文件 (*.txt);;所有文件 (*)'
+            )
             
-            QMessageBox.information(self, '成功', f'日志已导出到：{export_path}')
+            if file_path:
+                with open(self.log_file, 'r') as src, open(file_path, 'w') as dst:
+                    dst.write(src.read())
+                QMessageBox.information(self, '成功', f'日志已导出到：{file_path}')
         except Exception as e:
             QMessageBox.critical(self, '错误', f'导出日志失败：{str(e)}')
 
@@ -485,6 +523,20 @@ class JobManager(QMainWindow):
         QApplication.setOrganizationDomain('github.com/konbluesky')
         
         self.setWindowTitle(f'Chronos {VERSION}')
+        
+        # 设置目录路径
+        self.base_dir = os.path.expanduser('~/.chronos')
+        self.log_dir = os.path.join(self.base_dir, 'logs')
+        self.scripts_dir = os.path.join(self.base_dir, 'scripts')
+        
+        # 创建必要的目录
+        try:
+            os.makedirs(self.log_dir, exist_ok=True)
+            os.makedirs(self.scripts_dir, exist_ok=True)
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'无法创建必要的目录：{str(e)}\n请确保当前用户有权限创建目录。')
+            sys.exit(1)
+            
         self.setup_ui()
         try:
             self.cron = CronTab(user=True)
@@ -492,12 +544,15 @@ class JobManager(QMainWindow):
             QMessageBox.critical(self, '错误', f'无法初始化crontab：{str(e)}\n请确保系统支持crontab且当前用户有权限访问。')
             sys.exit(1)
 
-        # 初始化日志目录
-        self.log_dir = os.path.expanduser('~/.job_manager/logs')
+        # 初始化日志和脚本目录
+        self.base_dir = os.path.expanduser('~/.chronos')
+        self.log_dir = os.path.join(self.base_dir, 'logs')
+        self.scripts_dir = os.path.join(self.base_dir, 'scripts')
         try:
             os.makedirs(self.log_dir, exist_ok=True)
+            os.makedirs(self.scripts_dir, exist_ok=True)
         except Exception as e:
-            QMessageBox.critical(self, '错误', f'无法创建日志目录：{str(e)}\n请确保当前用户有权限创建目录。')
+            QMessageBox.critical(self, '错误', f'无法创建必要的目录：{str(e)}\n请确保当前用户有权限创建目录。')
             sys.exit(1)
 
         self.setup_tray()
@@ -563,6 +618,22 @@ class JobManager(QMainWindow):
         # 添加状态子菜单
         self.status_menu = QMenu('任务状态', self)
         self.tray_menu.addMenu(self.status_menu)
+        
+        # 添加任务管理子菜单
+        self.job_menu = QMenu('任务管理', self)
+        self.tray_menu.addMenu(self.job_menu)
+        
+        # 添加目录访问子菜单
+        self.directory_menu = QMenu('打开目录', self)
+        self.open_logs_action = QAction('日志目录', self)
+        self.open_logs_action.triggered.connect(self.open_logs_directory)
+        self.directory_menu.addAction(self.open_logs_action)
+        
+        self.open_scripts_action = QAction('脚本目录', self)
+        self.open_scripts_action.triggered.connect(self.open_scripts_directory)
+        self.directory_menu.addAction(self.open_scripts_action)
+        self.tray_menu.addMenu(self.directory_menu)
+        
         self.tray_menu.addSeparator()
 
         self.quit_action = QAction('退出', self)
@@ -575,38 +646,89 @@ class JobManager(QMainWindow):
         # 连接托盘图标的点击信号
         self.tray_icon.activated.connect(self.tray_icon_activated)
 
-    def tray_icon_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:  # 左键单击
-            self.show()
-            self.activateWindow()
-
     def update_status_menu(self):
         self.status_menu.clear()
+        self.job_menu.clear()
         for job in self.cron:
+            # 更新状态菜单
             status = '启用' if job.is_enabled() else '禁用'
-            action = QAction(f'{job.comment}: {status}', self)
-            action.setEnabled(False)
-            self.status_menu.addAction(action)
+            status_action = QAction(f'{job.comment}: {status}', self)
+            status_action.setEnabled(False)
+            self.status_menu.addAction(status_action)
+            
+            # 更新任务管理菜单
+            job_submenu = QMenu(job.comment, self)
+            
+            enable_action = QAction('启用', self)
+            enable_action.triggered.connect(lambda checked, j=job: self.enable_job_from_tray(j))
+            enable_action.setEnabled(not job.is_enabled())
+            job_submenu.addAction(enable_action)
+            
+            disable_action = QAction('禁用', self)
+            disable_action.triggered.connect(lambda checked, j=job: self.disable_job_from_tray(j))
+            disable_action.setEnabled(job.is_enabled())
+            job_submenu.addAction(disable_action)
+            
+            self.job_menu.addMenu(job_submenu)
+            
         if self.status_menu.isEmpty():
-            action = QAction('暂无任务', self)
-            action.setEnabled(False)
-            self.status_menu.addAction(action)
+            status_action = QAction('暂无任务', self)
+            status_action.setEnabled(False)
+            self.status_menu.addAction(status_action)
+            
+            job_action = QAction('暂无任务', self)
+            job_action.setEnabled(False)
+            self.job_menu.addAction(job_action)
+            
+    def enable_job_from_tray(self, job):
+        job.enable()
+        self.cron.write()
+        self.refresh_jobs()
+        
+    def disable_job_from_tray(self, job):
+        job.enable(False)
+        self.cron.write()
+        self.refresh_jobs()
 
     def refresh_jobs(self):
         self.table.setRowCount(0)
         enabled_count = 0
         disabled_count = 0
+        
         for job in self.cron:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(str(job.comment)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(job.command)))
+            name = job.comment
+            
+            # 从脚本文件中读取原始命令
+            script_path = self.get_script_path(name)
+            original_command = ""
+            if os.path.exists(script_path):
+                with open(script_path, 'r') as f:
+                    lines = f.readlines()
+                    # 查找以 ## 开头的行来获取原始命令
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith('## '):
+                            original_command = line[3:].strip()  # 去掉 '## ' 前缀
+                            break
+            
+            if not original_command:
+                original_command = job.command
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+            self.table.setItem(row, 1, QTableWidgetItem(original_command))
             self.table.setItem(row, 2, QTableWidgetItem(str(job.slices)))
-            self.table.setItem(row, 3, QTableWidgetItem('启用' if job.is_enabled() else '禁用'))
+            
+            # 添加启用/禁用状态
+            status_item = QTableWidgetItem('⬤')
             if job.is_enabled():
+                status_item.setForeground(QBrush(QColor('#2e7d32')))  # 绿色圆点
                 enabled_count += 1
             else:
+                status_item.setForeground(QBrush(QColor('#d32f2f')))  # 红色圆点
                 disabled_count += 1
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 3, status_item)
         
         total_count = enabled_count + disabled_count
         self.status_bar.showMessage(f'总任务数: {total_count} | 已启用: {enabled_count} | 已禁用: {disabled_count} | 版本: {VERSION}')
@@ -633,8 +755,8 @@ class JobManager(QMainWindow):
                 padding: 5px;
             }
             QTableWidget::item:selected {
-                background-color: #e3f2fd;
-                color: black;
+                background-color: #f5f5f5;
+                color: #333;
             }
             QHeaderView::section {
                 background-color: #f8f9fa;
@@ -658,6 +780,44 @@ class JobManager(QMainWindow):
             QStatusBar {
                 background-color: #f8f9fa;
                 color: #666;
+            }
+            QMenu {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                padding: 6px 0;
+                margin: 2px;
+            }
+            QMenu::item {
+                padding: 8px 24px;
+                font-size: 13px;
+                color: #333;
+            }
+            QMenu::item:selected {
+                background-color: #f0f7ff;
+                color: #007bff;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #eee;
+                margin: 4px 12px;
+            }
+            QMenuBar {
+                background-color: #f8f9fa;
+                border-bottom: 1px solid #ddd;
+            }
+            QMenuBar::item {
+                padding: 8px 12px;
+                font-size: 13px;
+                color: #333;
+            }
+            QMenuBar::item:selected {
+                background-color: #f0f7ff;
+                color: #007bff;
+            }
+            QMenuBar::item:pressed {
+                background-color: #f0f7ff;
+                color: #007bff;
             }
         """)
 
@@ -719,6 +879,18 @@ class JobManager(QMainWindow):
         self.refresh_action.setToolTip('刷新任务列表')
         view_menu.addAction(self.refresh_action)
 
+        # 添加打开目录的菜单项
+        view_menu.addSeparator()
+        self.open_logs_action = QAction('打开日志目录', self)
+        self.open_logs_action.setToolTip('打开存放日志文件的目录')
+        self.open_logs_action.triggered.connect(self.open_logs_directory)
+        view_menu.addAction(self.open_logs_action)
+
+        self.open_scripts_action = QAction('打开脚本目录', self)
+        self.open_scripts_action.setToolTip('打开存放脚本文件的目录')
+        self.open_scripts_action.triggered.connect(self.open_scripts_directory)
+        view_menu.addAction(self.open_scripts_action)
+
         # 帮助菜单
         help_menu = menubar.addMenu('帮助')
         about_action = QAction('关于', self)
@@ -729,6 +901,7 @@ class JobManager(QMainWindow):
         toolbar = QToolBar()
         self.addToolBar(toolbar)
         toolbar.setMovable(False)
+        toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)  # 禁用工具栏右键菜单
         toolbar.setIconSize(QSize(24, 24))
         toolbar.setStyleSheet("""
             QToolBar {
@@ -736,10 +909,19 @@ class JobManager(QMainWindow):
                 padding: 5px;
             }
             QToolButton {
+                border: solid 1px #007bff;
                 font-size: 14px;
                 padding: 8px;
                 margin: 2px;
                 min-width: 40px;
+                border-radius: 4px;
+                background-color: transparent;
+            }
+            QToolButton:hover {
+                background-color: rgba(0, 123, 255, 0.1);
+            }
+            QToolButton:pressed {
+                background-color: rgba(0, 123, 255, 0.2);
             }
         """)
 
@@ -865,14 +1047,16 @@ class JobManager(QMainWindow):
                         QMessageBox.warning(self, '输入错误', '任务名称已存在，请使用其他名称')
                         return
 
-                log_file = os.path.join(self.log_dir, f"{name}.log")
-                wrapped_command = f"{command} >> \"{log_file}\" 2>&1"
-                job = self.cron.new(command=wrapped_command, comment=name)
+                # 创建执行脚本
+                script_path = self.create_script_file(name, command)
+                # 添加到crontab
+                job = self.cron.new(command=script_path, comment=name)
                 job.setall(schedule)
 
                 try:
                     self.cron.write()
                     # 创建日志文件并添加初始记录
+                    log_file = self.get_log_path(name)
                     with open(log_file, 'a') as f:
                         f.write(f"=== 任务创建于 {datetime.datetime.now()} ===\n")
                         f.write(f"任务名称: {name}\n")
@@ -898,56 +1082,176 @@ class JobManager(QMainWindow):
             QMessageBox.warning(self, '警告', '请选择要编辑的任务')
             return
 
-        job = list(self.cron)[current_row]
-        dialog = JobDialog(self)
-        dialog.name_edit.setText(job.comment)
-        dialog.command_edit.setPlainText(job.command)
-        dialog.cron_editor.set_cron_expression(str(job.slices))
+        try:
+            cron_jobs = list(self.cron)
+            if current_row >= len(cron_jobs):
+                QMessageBox.warning(self, '错误', '无法找到选中的任务，请刷新任务列表后重试')
+                return
+            job = cron_jobs[current_row]
+            name = job.comment
+        
+            # 从脚本文件中读取原始命令
+            script_path = self.get_script_path(name)
+            original_command = job.command
+            if os.path.exists(script_path):
+                with open(script_path, 'r') as f:
+                    lines = f.readlines()
+                    # 查找以 ## 开头的行来获取原始命令
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith('## '):
+                            original_command = line[3:].strip()  # 去掉 '## ' 前缀
+                            break
+            
+            dialog = JobDialog(self)
+            dialog.name_edit.setText(name)
+            dialog.command_edit.setPlainText(original_command)
+            dialog.cron_editor.set_cron_expression(str(job.slices))
 
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            try:
-                job.set_command(dialog.command_edit.toPlainText().strip())
-                job.set_comment(dialog.name_edit.text().strip())
-                job.setall(dialog.cron_editor.get_cron_expression())
-                self.cron.write()
-                self.refresh_jobs()
-                QMessageBox.information(self, '成功', '任务已更新')
-            except Exception as e:
-                QMessageBox.critical(self, '错误', f'更新任务失败：{str(e)}')
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                try:
+                    new_name = dialog.name_edit.text().strip()
+                    new_command = dialog.command_edit.toPlainText().strip()
+                    
+                    # 如果任务名称改变，需要删除旧的脚本文件
+                    if new_name != name:
+                        old_script_path = self.get_script_path(name)
+                        if os.path.exists(old_script_path):
+                            os.remove(old_script_path)
+                    
+                    # 创建新的脚本文件
+                    script_path = self.create_script_file(new_name, new_command)
+                    
+                    # 更新crontab任务
+                    job.set_command(script_path)
+                    job.set_comment(new_name)
+                    job.setall(dialog.cron_editor.get_cron_expression())
+                    self.cron.write()
+                    self.refresh_jobs()
+                    self.status_bar.showMessage(f'任务 "{new_name}" 更新成功', 3000)
+                except IOError as e:
+                    if 'Operation not permitted' in str(e):
+                        QMessageBox.critical(self, '权限错误',
+                            '无法修改定时任务，因为当前用户没有足够的权限。\n\n'
+                            '请尝试以下解决方案：\n'
+                            '1. 使用管理员权限运行此程序\n'
+                            '2. 确保当前用户有权限修改crontab文件')
+                    else:
+                        QMessageBox.critical(self, '错误', f'写入定时任务失败：{str(e)}')
+                except Exception as e:
+                    QMessageBox.critical(self, '错误', f'更新任务失败：{str(e)}')
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'编辑任务失败：{str(e)}')
+
+    def normalize_task_name(self, name):
+        """将任务名称转换为有效的文件名"""
+        # 替换所有非字母数字字符为下划线
+        return re.sub(r'[^\w]', '_', name)
+
+    def get_script_path(self, name):
+        """获取任务对应的脚本文件路径"""
+        normalized_name = self.normalize_task_name(name)
+        return os.path.join(self.scripts_dir, f"{normalized_name}.sh")
+
+    def get_log_path(self, name):
+        """获取任务对应的日志文件路径"""
+        normalized_name = self.normalize_task_name(name)
+        return os.path.join(self.log_dir, f"{normalized_name}.log")
+
+    def create_script_file(self, name, command):
+        """创建任务的执行脚本"""
+        script_path = self.get_script_path(name)
+        log_path = self.get_log_path(name)
+        
+        script_content = f"#!/bin/bash\n\n# Task: {name}\n# Created: {datetime.datetime.now()}\n\n## {command}\n\n# 设置错误处理\nset -e\n\n# 添加分隔符\necho \"\n----------------------------------------\n执行时间: $(date '+%Y-%m-%d %H:%M:%S')\n----------------------------------------\n\" | tee -a \"{log_path}\"\n\n# 执行命令并记录日志\n{{ {command}; }} 2>&1 | tee -a \"{log_path}\" || {{\n    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 执行失败\" | tee -a \"{log_path}\"\n    exit 1\n}}\n\necho \"[$(date '+%Y-%m-%d %H:%M:%S')] 执行成功\" | tee -a \"{log_path}\"\n"
+        
+        try:
+            with open(script_path, 'w') as f:
+                f.write(script_content)
+            os.chmod(script_path, 0o755)  # 设置可执行权限
+            return script_path
+        except Exception as e:
+            raise Exception(f'创建脚本文件失败：{str(e)}')
 
     def delete_job(self):
-        current_row = self.table.currentRow()
-        if current_row < 0:
-            QMessageBox.warning(self, '警告', '请先选择一个任务')
+        selected_items = self.table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, '警告', '请先选择要删除的任务')
             return
 
-        name = self.table.item(current_row, 0).text()
-        reply = QMessageBox.question(self, '确认', f'确定要删除任务 "{name}" 吗？',
+        # 获取选中的行
+        rows = list(set(item.row() for item in selected_items))
+        names = [self.table.item(row, 0).text() for row in rows]
+        
+        # 构建确认消息
+        message = '确定要删除以下任务吗？\n\n' + '\n'.join(f'- {name}' for name in names)
+        reply = QMessageBox.question(self, '确认删除', message,
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
 
         if reply == QMessageBox.StandardButton.Yes:
-            for job in self.cron:
-                if job.comment == name:
-                    self.cron.remove(job)
-                    self.cron.write()
-                    self.refresh_jobs()
-                    break
+            try:
+                for name in names:
+                    # 删除crontab中的任务
+                    for job in self.cron:
+                        if job.comment == name:
+                            self.cron.remove(job)
+                            break
+                    
+                    # 清理相关文件
+                    script_path = self.get_script_path(name)
+                    log_path = self.get_log_path(name)
+                    
+                    if os.path.exists(script_path):
+                        os.remove(script_path)
+                    if os.path.exists(log_path):
+                        os.remove(log_path)
+                
+                # 写入crontab文件
+                self.cron.write()
+                self.refresh_jobs()
+                self.status_bar.showMessage(f'已删除 {len(names)} 个任务', 3000)
+            except Exception as e:
+                QMessageBox.critical(self, '错误', f'删除任务失败：{str(e)}')
 
     def refresh_jobs(self):
         self.table.setRowCount(0)
         enabled_count = 0
         disabled_count = 0
+        
         for job in self.cron:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            self.table.setItem(row, 0, QTableWidgetItem(str(job.comment)))
-            self.table.setItem(row, 1, QTableWidgetItem(str(job.command)))
+            name = job.comment
+            
+            # 从脚本文件中读取原始命令
+            script_path = self.get_script_path(name)
+            original_command = ""
+            if os.path.exists(script_path):
+                with open(script_path, 'r') as f:
+                    lines = f.readlines()
+                    # 查找以 ## 开头的行来获取原始命令
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith('## '):
+                            original_command = line[3:].strip()  # 去掉 '## ' 前缀
+                            break
+            
+            if not original_command:
+                original_command = job.command
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+            self.table.setItem(row, 1, QTableWidgetItem(original_command))
             self.table.setItem(row, 2, QTableWidgetItem(str(job.slices)))
-            self.table.setItem(row, 3, QTableWidgetItem('启用' if job.is_enabled() else '禁用'))
+            
+            # 添加启用/禁用状态
+            status_item = QTableWidgetItem('⬤')
             if job.is_enabled():
+                status_item.setForeground(QBrush(QColor('#2e7d32')))  # 绿色圆点
                 enabled_count += 1
             else:
+                status_item.setForeground(QBrush(QColor('#d32f2f')))  # 红色圆点
                 disabled_count += 1
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 3, status_item)
         
         total_count = enabled_count + disabled_count
         self.status_bar.showMessage(f'总任务数: {total_count} | 已启用: {enabled_count} | 已禁用: {disabled_count} | 版本: {VERSION}')
@@ -960,7 +1264,7 @@ class JobManager(QMainWindow):
             return
 
         name = self.table.item(current_row, 0).text()
-        log_file = os.path.join(self.log_dir, f"{name}.log")
+        log_file = self.get_log_path(name)
         
         if not os.path.exists(log_file):
             with open(log_file, 'w') as f:
@@ -1052,6 +1356,29 @@ class JobManager(QMainWindow):
 
     def show_context_menu(self, position):
         menu = QMenu()
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                padding: 6px 0;
+                margin: 2px;
+            }
+            QMenu::item {
+                padding: 8px 24px;
+                font-size: 13px;
+                color: #333;
+            }
+            QMenu::item:selected {
+                background-color: #f0f7ff;
+                color: #007bff;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #eee;
+                margin: 4px 12px;
+            }
+        """)
         edit_action = menu.addAction('编辑任务')
         delete_action = menu.addAction('删除任务')
         toggle_action = menu.addAction('启用/禁用')
@@ -1081,11 +1408,35 @@ class JobManager(QMainWindow):
             self.view_log()
 
 
+    def open_logs_directory(self):
+        """打开日志目录"""
+        try:
+            os.makedirs(self.log_dir, exist_ok=True)
+            self.open_directory(self.log_dir)
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'无法打开日志目录：{str(e)}')
+
+    def open_scripts_directory(self):
+        """打开脚本目录"""
+        try:
+            os.makedirs(self.scripts_dir, exist_ok=True)
+            self.open_directory(self.scripts_dir)
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'无法打开脚本目录：{str(e)}')
+
+    def open_directory(self, path):
+        if sys.platform == 'darwin':  # macOS
+            subprocess.run(['open', path])
+        elif sys.platform == 'win32':  # Windows
+            subprocess.run(['explorer', path])
+        else:  # Linux and other Unix-like systems
+            subprocess.run(['xdg-open', path])
+
     def show_about(self):
-        about_text = '<div style="text-align: center;">' \
-                     f'<h2>Chronos {VERSION}</h2>' \
-                     '<p>一个简单的定时任务管理工具，支持cron表达式，可以方便地管理和监控定时任务。</p>' \
-                     '<p>GitHub: <a href="https://github.com/konbluesky/chronos.git">https://github.com/konbluesky/chronos.git</a></p>' \
+        about_text = '<div style="padding: 20px;">' \
+                     f'<h2 style="margin-bottom: 15px;">Chronos {VERSION}</h2>' \
+                     '<p style="margin: 10px 0;">一个简单的定时任务管理工具，支持cron表达式，可以方便地管理和监控定时任务。</p>' \
+                     '<p style="margin: 10px 0;">GitHub: <a href="https://github.com/konbluesky/chronos.git" style="color: #007bff; text-decoration: none;">https://github.com/konbluesky/chronos.git</a></p>' \
                      '</div>'
         QMessageBox.about(self, '关于', about_text)
 
@@ -1099,6 +1450,14 @@ class JobManager(QMainWindow):
             self.setWindowFlags(flags & ~Qt.WindowType.WindowStaysOnTopHint)
             self.show()
             self.activateWindow()
+
+    def tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:  # 单击
+            if self.isVisible():
+                self.hide()
+            else:
+                self.show()
+                self.activateWindow()
 
 def main():
     app = QApplication(sys.argv)
