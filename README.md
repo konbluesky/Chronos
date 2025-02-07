@@ -108,6 +108,9 @@ crontab -e
 ### 添加任务
 ![添加任务](screenshots/add_task.png)
 
+### 添加任务(命令测试)
+![命令测试](screenshots/add_task_test.png)
+
 ### 日志查看
 ![日志查看](screenshots/view_log.png)
 
