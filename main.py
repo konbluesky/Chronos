@@ -19,6 +19,7 @@ Chronos - 图形化定时任务管理工具
 import sys
 import re
 import subprocess
+import json
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QFormLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
                              QHeaderView, QMessageBox, QSystemTrayIcon, QMenu, QToolBar, QStatusBar,
@@ -408,7 +409,43 @@ class JobDialog(QDialog):
             msg.setText(content)
             msg.setDetailedText(content)
             msg.setIcon(QMessageBox.Icon.Information if process.returncode == 0 else QMessageBox.Icon.Warning)
-            msg.exec()
+            
+            # 添加打开日志目录和脚本目录的按钮
+            open_logs_button = msg.addButton('打开日志目录', QMessageBox.ButtonRole.ActionRole)
+            open_scripts_button = msg.addButton('打开脚本目录', QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QMessageBox.StandardButton.Ok)
+            
+            # 设置弹窗样式和布局
+            msg.setStyleSheet("""
+                QMessageBox {
+                    min-width: 600px;
+                }
+                QLabel {
+                    min-width: 500px;
+                    font-size: 13px;
+                    padding: 10px;
+                }
+                QMessageBox QLabel#qt_msgbox_label {
+                    min-height: 40px;
+                }
+                QMessageBox QLabel#qt_msgboxex_icon_label {
+                    min-width: 100px;
+                    padding-right: 20px;
+                }
+                QPushButton {
+                    min-width: 100px;
+                    padding: 6px;
+                }
+            """)
+            
+            result = msg.exec()
+            
+            # 处理按钮点击事件
+            clicked_button = msg.clickedButton()
+            if clicked_button == open_logs_button:
+                self.parent().open_logs_directory()
+            elif clicked_button == open_scripts_button:
+                self.parent().open_scripts_directory()
             
             # 清理临时文件
             os.unlink(temp_file.name)
@@ -893,6 +930,22 @@ class JobManager(QMainWindow):
 
         # 帮助菜单
         help_menu = menubar.addMenu('帮助')
+        help_menu = menubar.addMenu('帮助')
+
+        # 添加导入/导出菜单
+        import_export_menu = menubar.addMenu('导入/导出')
+        self.export_action = QAction('导出任务', self)
+        self.export_action.setShortcut('Ctrl+Shift+E')
+        self.export_action.setToolTip('将当前任务配置导出到文件')
+        self.export_action.triggered.connect(self.export_tasks)
+        import_export_menu.addAction(self.export_action)
+
+        self.import_action = QAction('导入任务', self)
+        self.import_action.setShortcut('Ctrl+Shift+I')
+        self.import_action.setToolTip('从文件导入任务配置')
+        self.import_action.triggered.connect(self.import_tasks)
+        import_export_menu.addAction(self.import_action)
+
         about_action = QAction('关于', self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
@@ -976,54 +1029,7 @@ class JobManager(QMainWindow):
         self.refresh_action.triggered.connect(self.refresh_jobs)
         self.view_log_action.triggered.connect(self.view_log)
 
-    def test_command(self):
-        """测试命令功能"""
-        command = self.command_edit.toPlainText().strip()
-        if not command:
-            QMessageBox.warning(self, '警告', '请输入要测试的命令')
-            return
-            
-        try:
-            # 创建一个临时的日志文件来捕获命令输出
-            import tempfile
-            import subprocess
-            
-            with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
-                process = subprocess.Popen(
-                    command,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                
-                stdout, stderr = process.communicate(timeout=10)
-                
-                if process.returncode == 0:
-                    temp_file.write(f"命令执行成功！\n\n输出：\n{stdout}")
-                    title = '测试成功'
-                else:
-                    temp_file.write(f"命令执行失败！\n\n错误输出：\n{stderr}\n\n标准输出：\n{stdout}")
-                    title = '测试失败'
-                    
-            # 显示结果对话框
-            with open(temp_file.name, 'r') as f:
-                content = f.read()
-                
-            msg = QMessageBox(self)
-            msg.setWindowTitle(title)
-            msg.setText(content)
-            msg.setDetailedText(content)
-            msg.setIcon(QMessageBox.Icon.Information if process.returncode == 0 else QMessageBox.Icon.Warning)
-            msg.exec()
-            
-            # 清理临时文件
-            os.unlink(temp_file.name)
-            
-        except subprocess.TimeoutExpired:
-            QMessageBox.critical(self, '错误', '命令执行超时')
-        except Exception as e:
-            QMessageBox.critical(self, '错误', f'执行命令时发生错误：{str(e)}')
+    
 
     def add_job(self):
         dialog = JobDialog(self)
@@ -1163,7 +1169,7 @@ class JobManager(QMainWindow):
         script_path = self.get_script_path(name)
         log_path = self.get_log_path(name)
         
-        script_content = f"#!/bin/bash\n\n# Task: {name}\n# Created: {datetime.datetime.now()}\n\n## {command}\n\n# 设置错误处理\nset -e\n\n# 添加分隔符\necho \"\n----------------------------------------\n执行时间: $(date '+%Y-%m-%d %H:%M:%S')\n----------------------------------------\n\" | tee -a \"{log_path}\"\n\n# 执行命令并记录日志\n{{ {command}; }} 2>&1 | tee -a \"{log_path}\" || {{\n    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 执行失败\" | tee -a \"{log_path}\"\n    exit 1\n}}\n\necho \"[$(date '+%Y-%m-%d %H:%M:%S')] 执行成功\" | tee -a \"{log_path}\"\n"
+        script_content = f"#!/bin/bash\n\n# Task: {name}\n# Created: {datetime.datetime.now()}\n\n## {command}\n\n# 设置错误处理\nset -e\n\n# 设置工作目录\ncd $(dirname \"$0\")\n\n# 添加分隔符\necho \"\n----------------------------------------\n执行时间: $(date '+%Y-%m-%d %H:%M:%S')\n----------------------------------------\n\" | tee -a \"{log_path}\"\n\n# 执行命令并记录日志\n{{ {command}; }} 2>&1 | tee -a \"{log_path}\" || {{\n    echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 执行失败\" | tee -a \"{log_path}\"\n    exit 1\n}}\n\necho \"[$(date '+%Y-%m-%d %H:%M:%S')] 执行成功\" | tee -a \"{log_path}\"\n"
         
         try:
             with open(script_path, 'w') as f:
@@ -1439,6 +1445,100 @@ class JobManager(QMainWindow):
                      '<p style="margin: 10px 0;">GitHub: <a href="https://github.com/konbluesky/chronos.git" style="color: #007bff; text-decoration: none;">https://github.com/konbluesky/chronos.git</a></p>' \
                      '</div>'
         QMessageBox.about(self, '关于', about_text)
+
+    def export_tasks(self):
+        """导出任务配置到文件"""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            '导出任务',
+            '',
+            'JSON文件 (*.json);;所有文件 (*)'
+        )
+        if not file_path:
+            return
+
+        try:
+            tasks = []
+            for row in range(self.table.rowCount()):
+                task = {
+                    'name': self.table.item(row, 0).text(),
+                    'command': self.table.item(row, 1).text(),
+                    'schedule': self.table.item(row, 2).text(),
+                    'enabled': self.table.item(row, 3).text() == '是'
+                }
+                tasks.append(task)
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(tasks, f, ensure_ascii=False, indent=2)
+
+            QMessageBox.information(self, '成功', '任务配置已成功导出！')
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'导出任务配置时发生错误：{str(e)}')
+
+    def import_tasks(self):
+        """从文件导入任务配置"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            '导入任务',
+            '',
+            'JSON文件 (*.json);;所有文件 (*)'
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                tasks = json.load(f)
+
+            if not isinstance(tasks, list):
+                raise ValueError('无效的任务配置文件格式')
+
+            for task in tasks:
+                if not all(key in task for key in ['name', 'command', 'schedule', 'enabled']):
+                    raise ValueError('任务配置缺少必要字段')
+
+                # 添加任务到表格
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.table.setItem(row, 0, QTableWidgetItem(task['name']))
+                self.table.setItem(row, 1, QTableWidgetItem(task['command']))
+                self.table.setItem(row, 2, QTableWidgetItem(task['schedule']))
+                self.table.setItem(row, 3, QTableWidgetItem('是' if task['enabled'] else '否'))
+
+            QMessageBox.information(self, '成功', '任务配置已成功导入！')
+            self.save_tasks()  # 保存导入的任务
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'导入任务配置时发生错误：{str(e)}')
+
+    def save_tasks(self):
+        """将表格中的任务保存到 crontab"""
+        try:
+            # 清空现有的 crontab 任务
+            self.cron.remove_all()
+            
+            # 遍历表格中的所有任务
+            for row in range(self.table.rowCount()):
+                name = self.table.item(row, 0).text()
+                command = self.table.item(row, 1).text()
+                schedule = self.table.item(row, 2).text()
+                enabled = self.table.item(row, 3).text() == '⬤' and self.table.item(row, 3).foreground().color().name() == '#2e7d32'
+                
+                # 创建执行脚本
+                script_path = self.create_script_file(name, command)
+                
+                # 添加到 crontab
+                job = self.cron.new(command=script_path, comment=name)
+                job.setall(schedule)
+                
+                # 设置任务状态
+                if not enabled:
+                    job.enable(False)
+            
+            # 写入 crontab 文件
+            self.cron.write()
+            self.refresh_jobs()
+        except Exception as e:
+            QMessageBox.critical(self, '错误', f'保存任务配置时发生错误：{str(e)}')
 
     def toggle_stay_on_top(self):
         flags = self.windowFlags()
