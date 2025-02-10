@@ -4,6 +4,12 @@
 [![Python](https://img.shields.io/badge/python-3.6%2B-blue)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/PyQt-6.5.0%2B-green)](https://www.riverbankcomputing.com/software/pyqt/)
 
+---
+
+<div align="center">
+  <img src="icon.svg" alt="Chronos Logo" width="128" height="128">
+</div>
+
 一个基于PyQt6开发的图形化定时任务管理工具，支持cron表达式，可以方便地管理和监控Linux/Unix系统的定时任务。
 
 ## ✨ 主要特性
