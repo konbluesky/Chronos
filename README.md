@@ -4,8 +4,6 @@
 [![Python](https://img.shields.io/badge/python-3.6%2B-blue)](https://www.python.org/)
 [![PyQt6](https://img.shields.io/badge/PyQt-6.5.0%2B-green)](https://www.riverbankcomputing.com/software/pyqt/)
 
----
-
 <div align="center">
   <img src="icon.svg" alt="Chronos Logo" width="128" height="128">
 </div>
