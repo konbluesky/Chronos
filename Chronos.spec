@@ -10,7 +10,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('/Users/lichm1/work/job-manager/icon.png', '.'), ('/Users/lichm1/work/job-manager/icon.svg', '.'), ('Info.plist', '.'), ('icon.icns', '.'), ('icon.png', '.'), ('icon.svg', '.'), ('Info.plist', '.')],
+    datas=[('icon.icns', '.'), ('icon.png', '.'), ('icon.svg', '.'), ('Info.plist', '.')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -32,12 +32,13 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    disable_windowed_traceback=True,
+    disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch='arm64',
     codesign_identity='',
     entitlements_file='',
-    icon=['/Users/lichm1/work/job-manager/icon.png','icon.icns'],
+    version='v5.6.20250208.ed5bff5',
+    icon=['icon.icns'],
 )
 coll = COLLECT(
     exe,
@@ -51,6 +52,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='Chronos.app',
-    icon='/Users/lichm1/work/job-manager/icon.png',
+    icon='icon.icns',
     bundle_identifier='com.konbluesky.chronos',
 )
